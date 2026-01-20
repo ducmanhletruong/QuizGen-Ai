@@ -1,0 +1,5 @@
+{
+  "name": "QuizGen AI",
+  "description": "Transform PDF documents into comprehensive educational quizzes using Gemini AI. Upload a file, generate questions, and test your knowledge instantly.",
+  "requestFramePermissions": []
+}
