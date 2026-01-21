@@ -1,12 +1,23 @@
 import { getDocument, GlobalWorkerOptions, version } from 'pdfjs-dist';
 
-// Use jsDelivr for the worker source. 
+// Use jsDelivr for the worker source as it is generally reliable and CORS-enabled.
 // We explicitly use the imported 'version' to ensure the worker matches the main thread exactly.
 // This prevents "Setting up fake worker failed" errors caused by version mismatch.
 const CDN_BASE = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${version}`;
 
 // Configure worker to use the minified MJS version.
+// Explicitly setting the workerSrc helps PDF.js locate the external worker file
+// instead of trying to evaluate it from an incorrect relative path.
 GlobalWorkerOptions.workerSrc = `${CDN_BASE}/build/pdf.worker.min.mjs`;
+
+// OPTIMIZATION: Eagerly fetch the worker script in the background to warm up the cache.
+// This acts as a redundant fallback to the HTML <link rel="preload"> to ensure 
+// the worker is ready when the user uploads a file.
+try {
+  fetch(GlobalWorkerOptions.workerSrc, { method: 'HEAD', mode: 'cors' }).catch(() => {});
+} catch (e) {
+  // Ignore fetch errors during warmup
+}
 
 /**
  * Normalizes extracted text.
@@ -32,6 +43,7 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
     
     // Load document with CMap support for foreign languages (Vietnamese/Asian characters)
     // CMap files are essential for correctly mapping character codes to glyphs in PDFs.
+    // We load these from the same CDN to ensure consistency and speed (preconnect applies).
     const loadingTask = getDocument({
       data: arrayBuffer,
       cMapUrl: `${CDN_BASE}/cmaps/`,
@@ -108,7 +120,7 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
     }
 
     if (error.message?.includes('Failed to fetch') || error.message?.includes('dynamically imported module')) {
-         throw new Error("Không thể tải thư viện xử lý PDF. Vui lòng kiểm tra kết nối mạng.");
+         throw new Error("Không thể tải thư viện xử lý PDF. Vui lòng tắt AdBlock hoặc kiểm tra kết nối internet.");
     }
 
     // Pass through custom errors thrown in the validation block

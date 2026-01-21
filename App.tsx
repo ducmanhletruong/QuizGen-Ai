@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { extractTextFromPDF } from './utils/pdfUtils';
 import { generateQuizFromText } from './services/geminiService';
@@ -7,13 +6,15 @@ import FileUpload from './components/FileUpload';
 import QuizPlayer from './components/QuizPlayer';
 import DifficultySelector from './components/DifficultySelector';
 import ModeSelector from './components/ModeSelector';
-import { BrainCircuit, AlertTriangle, FileWarning, Lock, WifiOff, RefreshCcw, ShieldAlert, Globe, FileText, Plus, ArrowRight, X } from 'lucide-react';
+import GuideModal from './components/GuideModal';
+import { BrainCircuit, AlertTriangle, FileWarning, Lock, WifiOff, RefreshCcw, ShieldAlert, Globe, FileText, Plus, ArrowRight, X, HelpCircle } from 'lucide-react';
 
 const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>(AppState.IDLE);
   const [quizData, setQuizData] = useState<QuizData | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string>('');
+  const [showGuide, setShowGuide] = useState<boolean>(false);
   
   // Settings
   const [selectedMode, setSelectedMode] = useState<StudyMode>('review');
@@ -40,10 +41,6 @@ const App: React.FC = () => {
     try {
       setAppState(AppState.EXTRACTING);
       setErrorMsg(null);
-      // We do NOT reset historyQuestions here if we are appending files, 
-      // but logic below handles "fresh start" vs "add more" via extractedText state check? 
-      // Actually, if appState was IDLE, we should clear. If FILE_REVIEW/ADDING_MORE (simulated), we keep.
-      // But simplifying: handleFileUpload is called. If extractedText is null, it's a fresh start.
       
       if (!extractedText) {
         setHistoryQuestions([]);
@@ -158,11 +155,21 @@ const App: React.FC = () => {
               </span>
             </div>
             
-            {appState !== AppState.IDLE && appState !== AppState.READY && (
-               <button onClick={resetApp} className="text-sm font-medium text-slate-500 hover:text-slate-800">
-                 Bắt đầu lại
-               </button>
-            )}
+            <div className="flex items-center space-x-2 md:space-x-4">
+              <button 
+                onClick={() => setShowGuide(true)}
+                className="flex items-center px-3 py-1.5 text-sm font-medium text-slate-500 hover:text-primary-600 hover:bg-slate-50 rounded-lg transition-colors"
+              >
+                <HelpCircle className="w-4 h-4 mr-1.5" />
+                <span className="hidden md:inline">Hướng dẫn</span>
+              </button>
+              
+              {appState !== AppState.IDLE && appState !== AppState.READY && (
+                 <button onClick={resetApp} className="text-sm font-medium text-slate-500 hover:text-slate-800 px-3 py-1.5">
+                   Bắt đầu lại
+                 </button>
+              )}
+            </div>
           </div>
         </div>
       </nav>
@@ -174,6 +181,10 @@ const App: React.FC = () => {
         {appState === AppState.IDLE && (
           <div className="animate-in fade-in slide-in-from-bottom-2 duration-500">
             <div className="text-center mb-8 md:mb-12 px-4">
+              <div className="inline-flex items-center justify-center px-3 py-1 rounded-full bg-primary-50 text-primary-600 text-xs font-bold uppercase tracking-widest mb-4 cursor-pointer hover:bg-primary-100 transition-colors" onClick={() => setShowGuide(true)}>
+                <BrainCircuit className="w-3 h-3 mr-1.5" />
+                Tính năng mới: AI Web Search
+              </div>
               <h1 className="text-3xl md:text-5xl font-black text-slate-900 mb-3 leading-tight tracking-tight">
                 Học tập <span className="text-primary-600">thông minh</span> hơn
               </h1>
@@ -387,6 +398,8 @@ const App: React.FC = () => {
           </div>
         )}
       </main>
+
+      {showGuide && <GuideModal onClose={() => setShowGuide(false)} />}
 
       <footer className="bg-white border-t border-slate-100 py-6 mt-auto">
         <div className="container mx-auto px-4 text-center text-slate-400 text-[10px] md:text-xs font-bold uppercase tracking-widest">

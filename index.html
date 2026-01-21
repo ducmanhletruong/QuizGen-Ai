@@ -4,6 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>QuizGen AI</title>
+    <!-- Preconnect to CDNs to speed up initial connection -->
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin="anonymous">
+    <link rel="preconnect" href="https://esm.sh" crossorigin="anonymous">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    
+    <!-- Preload the PDF worker to avoid delay on first use -->
+    <!-- We pin the version here to match the import map for best performance -->
+    <link rel="preload" href="https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.530/build/pdf.worker.min.mjs" as="script" crossorigin="anonymous">
+
     <!-- Tailwind CSS CDN for simplicity in this setup -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script async defer src="https://apis.google.com/js/api.js"></script>
@@ -102,7 +112,7 @@
     "react": "https://esm.sh/react@^19.2.3",
     "@google/genai": "https://esm.sh/@google/genai@^1.38.0",
     "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "pdfjs-dist": "https://esm.sh/pdfjs-dist@^5.4.530",
+    "pdfjs-dist": "https://esm.sh/pdfjs-dist@5.4.530",
     "lucide-react": "https://esm.sh/lucide-react@^0.562.0",
     "react-markdown": "https://esm.sh/react-markdown@^10.1.0",
     "vite": "https://esm.sh/vite@^7.3.1",

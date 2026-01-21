@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { SYSTEM_PROMPT, MODEL_NAME } from '../constants';
 import { QuizData, DifficultyDistribution, GenerationSource } from '../types';
@@ -214,8 +213,14 @@ export const generateQuizFromText = async (
       }
     });
 
-    const jsonText = response.text;
+    let jsonText = response.text;
     if (!jsonText) throw new Error("No response generated from AI");
+    
+    // Robust cleanup: Remove markdown wrapping if present
+    if (jsonText.startsWith("```")) {
+        jsonText = jsonText.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/, "");
+    }
+    
     return JSON.parse(jsonText) as QuizData;
   };
 
