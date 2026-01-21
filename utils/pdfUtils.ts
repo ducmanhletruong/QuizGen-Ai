@@ -1,28 +1,28 @@
-import * as pdfjsLib from 'pdfjs-dist';
+import { getDocument, GlobalWorkerOptions, version } from 'pdfjs-dist';
 
-// Ensure we have a valid version, fallback to a known version if needed.
-// Using the version from the library ensures the worker matches the main thread code.
-const PDFJS_VERSION = pdfjsLib.version || '5.4.530';
+// Use jsDelivr for the worker source. 
+// We explicitly use the imported 'version' to ensure the worker matches the main thread exactly.
+// This prevents "Setting up fake worker failed" errors caused by version mismatch.
+const CDN_BASE = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${version}`;
 
-// Set up the worker source using esm.sh to match the importmap provider.
-// This is critical for avoiding version mismatch errors and 404s from cdnjs.
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
+// Configure worker to use the minified MJS version.
+GlobalWorkerOptions.workerSrc = `${CDN_BASE}/build/pdf.worker.min.mjs`;
 
 /**
- * Normalizes extracted text to remove control characters and fix common encoding artifacts.
+ * Normalizes extracted text.
+ * Relaxed logic to prevent filtering out valid text in some encodings.
  */
 const cleanText = (text: string): string => {
+  if (!text) return "";
   return text
-    // Remove null bytes and control characters (except newlines/tabs)
-    .replace(/[\x00-\x09\x0B-\x0C\x0E-\x1F\x7F]/g, '')
-    // Normalize unicode characters (e.g., separate accents to combined)
+    // Replace non-printable control characters (excluding newlines/tabs)
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+    // Normalize unicode 
     .normalize('NFKC')
-    // Collapse multiple spaces into one
+    // Reduce excessive whitespace but keep structure
     .replace(/[ \t]+/g, ' ')
-    // Fix hyphenated words across lines (e.g., "exam-\nple" -> "example")
-    .replace(/-\n/g, '')
-    // Collapse multiple newlines into max two (paragraph breaks)
-    .replace(/\n{3,}/g, '\n\n')
+    // Fix broken words at end of lines (simple heuristic)
+    .replace(/(\w+)-\n(\w+)/g, '$1$2')
     .trim();
 };
 
@@ -30,13 +30,13 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
   try {
     const arrayBuffer = await file.arrayBuffer();
     
-    // Load the document with CMap support for better text extraction (handles complex fonts/Vietnamese)
-    // standardFontDataUrl helps with standard font rendering
-    const loadingTask = pdfjsLib.getDocument({
+    // Load document with CMap support for foreign languages (Vietnamese/Asian characters)
+    // CMap files are essential for correctly mapping character codes to glyphs in PDFs.
+    const loadingTask = getDocument({
       data: arrayBuffer,
-      cMapUrl: `https://esm.sh/pdfjs-dist@${PDFJS_VERSION}/cmaps/`,
+      cMapUrl: `${CDN_BASE}/cmaps/`,
       cMapPacked: true,
-      standardFontDataUrl: `https://esm.sh/pdfjs-dist@${PDFJS_VERSION}/standard_fonts/`,
+      standardFontDataUrl: `${CDN_BASE}/standard_fonts/`,
     });
 
     const pdf = await loadingTask.promise;
@@ -46,55 +46,81 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
     }
 
     let fullText = '';
+    let totalItems = 0;
     
-    // Extract text from each page
+    // Iterate through all pages
     for (let i = 1; i <= pdf.numPages; i++) {
       try {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
         
-        // Improve join logic: check for end of line markers if available, otherwise assume space
+        totalItems += textContent.items.length;
+
+        // Simple text assembly
         const pageText = textContent.items
           .map((item: any) => {
-             const str = item.str || '';
-             // Add a newline if the item marks the end of a line (if property exists), otherwise space
-             return item.hasEOL ? `${str}\n` : str;
+             const str = item.str || ''; 
+             return item.hasEOL ? `${str}\n` : `${str} `;
           })
-          .join(' ');
+          .join('');
         
         const cleanedPageText = cleanText(pageText);
 
-        // Add page markers to help the AI understand document structure
         if (cleanedPageText.length > 0) {
           fullText += `--- Page ${i} ---\n${cleanedPageText}\n\n`;
         }
       } catch (pageError) {
         console.warn(`Warning: Could not extract text from page ${i}`, pageError);
-        fullText += `--- Page ${i} (Lỗi đọc trang này) ---\n\n`;
       }
     }
 
-    if (fullText.trim().length === 0) {
-        throw new Error("Không tìm thấy văn bản nào có thể đọc được. File có thể là ảnh scan chưa qua OCR.");
+    // Final Validation with Granular Error Messages
+    const trimmedText = fullText.trim();
+    
+    if (trimmedText.length < 50) {
+        // Case 1: Scanned PDF (OCR required)
+        // If we found very few text items (less than 5 items total for the whole doc), it's likely an image.
+        if (totalItems < 5) {
+             throw new Error("File PDF giống ảnh scan (không có lớp văn bản). Vui lòng sử dụng file PDF có thể bôi đen/copy text được.");
+        }
+        
+        // Case 2: Encoding/Font Issues
+        // We found items, but they cleaned down to nothing or garbage.
+        console.warn("PDF extraction found items but text is mostly empty. Items count:", totalItems);
+        throw new Error("Không thể giải mã văn bản (Lỗi Font/Encoding). File có thể chứa ký tự đặc biệt hoặc font không chuẩn Unicode.");
     }
 
     return fullText;
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error extracting PDF text:", error);
     
-    if (error instanceof Error) {
-        // Handle specific PDF.js errors
-        if (error.message.includes('Setting up fake worker failed')) {
-            throw new Error("Lỗi hệ thống đọc PDF (Worker mismatch). Vui lòng tải lại trang.");
-        }
-        if (error.name === 'PasswordException') {
-            throw new Error("File PDF được bảo vệ bằng mật khẩu. Vui lòng mở khóa trước khi tải lên.");
-        }
-        if (error.message.includes('Invalid PDF structure') || error.message.includes('Missing PDF header')) {
-             throw new Error("File bị lỗi hoặc không phải định dạng PDF hợp lệ.");
-        }
-        throw new Error(`Lỗi đọc file: ${error.message}`);
+    // Handle specific PDF.js errors
+    if (error.name === 'PasswordException' || error.message?.includes('Password')) {
+        throw new Error("File PDF được bảo vệ bằng mật khẩu. Vui lòng mở khóa file trước khi tải lên.");
     }
-    throw new Error("Đã xảy ra lỗi không xác định khi đọc file PDF.");
+
+    if (error.name === 'InvalidPDFException') {
+        throw new Error("File không đúng định dạng PDF hoặc bị hỏng.");
+    }
+
+    if (error.message?.includes('Setting up fake worker failed') || error.message?.includes('No PDF.js worker found')) {
+        throw new Error("Lỗi hệ thống đọc PDF (Worker Load Failed). Vui lòng tải lại trang và thử lại.");
+    }
+
+    if (error.message?.includes('Failed to fetch') || error.message?.includes('dynamically imported module')) {
+         throw new Error("Không thể tải thư viện xử lý PDF. Vui lòng kiểm tra kết nối mạng.");
+    }
+
+    // Pass through custom errors thrown in the validation block
+    if (
+        error.message?.includes('File PDF giống ảnh scan') || 
+        error.message?.includes('Không thể giải mã văn bản') ||
+        error.message?.includes('File PDF không có trang nào')
+    ) {
+        throw error;
+    }
+
+    // Fallback generic error
+    throw new Error("Đã xảy ra lỗi khi đọc file PDF. File có thể bị hỏng hoặc định dạng không hỗ trợ.");
   }
 };
