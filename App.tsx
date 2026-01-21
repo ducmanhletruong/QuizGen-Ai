@@ -7,7 +7,9 @@ import QuizPlayer from './components/QuizPlayer';
 import DifficultySelector from './components/DifficultySelector';
 import ModeSelector from './components/ModeSelector';
 import GuideModal from './components/GuideModal';
+import OCRRunner from './components/OCRRunner';
 import { BrainCircuit, AlertTriangle, FileWarning, Lock, WifiOff, RefreshCcw, ShieldAlert, Globe, FileText, Plus, ArrowRight, X, HelpCircle } from 'lucide-react';
+import { PDFDocumentProxy } from 'pdfjs-dist';
 
 const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>(AppState.IDLE);
@@ -16,6 +18,11 @@ const App: React.FC = () => {
   const [statusMsg, setStatusMsg] = useState<string>('');
   const [showGuide, setShowGuide] = useState<boolean>(false);
   
+  // OCR State
+  const [showOCR, setShowOCR] = useState(false);
+  const [scannedPDF, setScannedPDF] = useState<PDFDocumentProxy | null>(null);
+  const [scannedFileName, setScannedFileName] = useState<string>("");
+
   // Settings
   const [selectedMode, setSelectedMode] = useState<StudyMode>('review');
   const [examDuration, setExamDuration] = useState<number | undefined>(undefined);
@@ -41,6 +48,8 @@ const App: React.FC = () => {
     try {
       setAppState(AppState.EXTRACTING);
       setErrorMsg(null);
+      setShowOCR(false);
+      setScannedPDF(null);
       
       if (!extractedText) {
         setHistoryQuestions([]);
@@ -56,7 +65,7 @@ const App: React.FC = () => {
         setStatusMsg(`Đang đọc file ${i + 1}/${files.length}: ${file.name}...`);
         
         try {
-          const text = await extractTextFromPDF(file);
+          const { text, pdfDoc } = await extractTextFromPDF(file);
           if (text && text.trim().length >= 50) {
             newCombinedText += `\n\n=== FILE BẮT ĐẦU: ${file.name} ===\n${text}\n=== FILE KẾT THÚC: ${file.name} ===\n`;
             validFiles.push(file.name);
@@ -64,7 +73,15 @@ const App: React.FC = () => {
             console.warn(`File ${file.name} is too short or empty.`);
             failedFiles.push(file.name);
           }
-        } catch (fileErr) {
+        } catch (fileErr: any) {
+          // Check for specific OCR trigger
+          if (fileErr.code === 'PDF_SCANNED' && fileErr.pdfDoc) {
+             setScannedPDF(fileErr.pdfDoc);
+             setScannedFileName(file.name);
+             setShowOCR(true);
+             setAppState(AppState.IDLE); // Go back to idle to show OCR component overlay
+             return; // Stop processing and wait for user OCR decision
+          }
           console.warn(`Lỗi đọc file ${file.name}`, fileErr);
           failedFiles.push(file.name);
         }
@@ -83,6 +100,24 @@ const App: React.FC = () => {
       console.error(err);
       setAppState(AppState.ERROR);
       setErrorMsg(err.message || 'Đã xảy ra lỗi không xác định.');
+    }
+  };
+
+  const handleOCRComplete = (text: string) => {
+    setShowOCR(false);
+    setScannedPDF(null);
+    setExtractedText(prev => (prev || "") + `\n\n=== FILE OCR: ${scannedFileName} ===\n${text}\n`);
+    setUploadedFileNames(prev => [...prev, scannedFileName]);
+    setAppState(AppState.FILE_REVIEW);
+  };
+
+  const handleOCRCancel = () => {
+    setShowOCR(false);
+    setScannedPDF(null);
+    if (uploadedFileNames.length > 0) {
+      setAppState(AppState.FILE_REVIEW);
+    } else {
+      setAppState(AppState.IDLE);
     }
   };
 
@@ -138,6 +173,8 @@ const App: React.FC = () => {
     setExtractedText(null);
     setUploadedFileNames([]);
     setHistoryQuestions([]);
+    setShowOCR(false);
+    setScannedPDF(null);
   };
 
   return (
@@ -177,8 +214,27 @@ const App: React.FC = () => {
       {/* Main Content */}
       <main className="flex-grow container mx-auto px-3 py-6 md:py-12">
         
+        {/* OCR Runner Modal/Overlay */}
+        {showOCR && scannedPDF && (
+           <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+             <div className="w-full">
+               <OCRRunner 
+                 pdfDoc={scannedPDF} 
+                 fileName={scannedFileName}
+                 onComplete={handleOCRComplete} 
+                 onCancel={handleOCRCancel}
+                 onError={(msg) => {
+                   setShowOCR(false);
+                   setAppState(AppState.ERROR);
+                   setErrorMsg(msg);
+                 }}
+               />
+             </div>
+           </div>
+        )}
+
         {/* State: IDLE - Initial Upload */}
-        {appState === AppState.IDLE && (
+        {appState === AppState.IDLE && !showOCR && (
           <div className="animate-in fade-in slide-in-from-bottom-2 duration-500">
             <div className="text-center mb-8 md:mb-12 px-4">
               <div className="inline-flex items-center justify-center px-3 py-1 rounded-full bg-primary-50 text-primary-600 text-xs font-bold uppercase tracking-widest mb-4 cursor-pointer hover:bg-primary-100 transition-colors" onClick={() => setShowGuide(true)}>
@@ -240,10 +296,6 @@ const App: React.FC = () => {
                   {/* Option 2: Add More Files */}
                   <div>
                     <p className="text-center text-sm text-slate-500 mb-3 font-medium">Bạn muốn bổ sung thêm tài liệu?</p>
-                    {/* Reuse FileUpload but simplified visually if needed, or just embed it */}
-                    {/* We can just toggle a "isAdding" state, OR simply render FileUpload here directly.
-                        Rendering it directly is good UX - one click to browse/drag.
-                    */}
                     <div className="border-2 border-dashed border-slate-300 rounded-xl p-6 bg-slate-50 hover:bg-white hover:border-primary-400 transition-colors text-center cursor-pointer group">
                        <label className="cursor-pointer block w-full h-full">
                           <input 
@@ -328,11 +380,12 @@ const App: React.FC = () => {
                       title = "File được bảo vệ";
                       suggestion = "File PDF này có mật khẩu. Vui lòng mở khóa file hoặc tải lên một file khác.";
                       bgColor = "bg-orange-50";
-                   } else if (msg.includes("không tìm thấy nội dung") || msg.includes("ảnh scan") || msg.includes("trống")) {
-                      icon = <FileWarning className="w-8 h-8 md:w-10 md:h-10 text-yellow-600" />;
-                      title = "Không đọc được nội dung";
-                      suggestion = "File PDF có thể là ảnh scan hoặc không chứa văn bản dạng text. Hãy thử file PDF khác.";
-                      bgColor = "bg-yellow-50";
+                   } else if (msg.includes("ảnh scan") || msg.includes("ocr")) {
+                      // Handled by OCR Runner usually, but fall back here if failed
+                      icon = <FileWarning className="w-8 h-8 md:w-10 md:h-10 text-orange-600" />;
+                      title = "Không nhận diện được";
+                      suggestion = "Quá trình OCR thất bại hoặc bạn đã hủy. Vui lòng thử file khác.";
+                      bgColor = "bg-orange-50";
                    } else if (msg.includes("quá lớn") || msg.includes("limit")) {
                        icon = <FileWarning className="w-8 h-8 md:w-10 md:h-10 text-blue-600" />;
                        title = "File quá lớn";

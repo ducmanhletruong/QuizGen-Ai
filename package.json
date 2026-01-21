@@ -17,7 +17,8 @@
     "react-markdown": "^9.0.1",
     "rehype-katex": "^7.0.0",
     "remark-math": "^6.0.0",
-    "katex": "^0.16.9"
+    "katex": "^0.16.9",
+    "tesseract.js": "^5.0.5"
   },
   "devDependencies": {
     "@types/react": "^18.2.64",

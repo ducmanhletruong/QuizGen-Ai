@@ -216,9 +216,18 @@ export const generateQuizFromText = async (
     let jsonText = response.text;
     if (!jsonText) throw new Error("No response generated from AI");
     
-    // Robust cleanup: Remove markdown wrapping if present
-    if (jsonText.startsWith("```")) {
-        jsonText = jsonText.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/, "");
+    // Improved Parsing Logic: Handle Code Blocks and Extract JSON Object
+    // 1. Strip markdown code blocks if present
+    if (jsonText.includes("```")) {
+       jsonText = jsonText.replace(/```json/gi, "").replace(/```/g, "");
+    }
+    
+    // 2. Locate the first '{' and last '}' to strip any prologue/epilogue text
+    const firstBrace = jsonText.indexOf('{');
+    const lastBrace = jsonText.lastIndexOf('}');
+    
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      jsonText = jsonText.substring(firstBrace, lastBrace + 1);
     }
     
     return JSON.parse(jsonText) as QuizData;
