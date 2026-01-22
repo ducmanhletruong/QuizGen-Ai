@@ -8,7 +8,7 @@ import DifficultySelector from './components/DifficultySelector';
 import ModeSelector from './components/ModeSelector';
 import GuideModal from './components/GuideModal';
 import OCRRunner from './components/OCRRunner';
-import { BrainCircuit, AlertTriangle, FileWarning, Lock, WifiOff, RefreshCcw, ShieldAlert, Globe, FileText, Plus, ArrowRight, X, HelpCircle } from 'lucide-react';
+import { BrainCircuit, AlertTriangle, FileWarning, Lock, WifiOff, RefreshCcw, ShieldAlert, Globe, FileText, Plus, ArrowRight, X, HelpCircle, Cloud } from 'lucide-react';
 import { PDFDocumentProxy } from 'pdfjs-dist';
 
 const App: React.FC = () => {
@@ -32,6 +32,8 @@ const App: React.FC = () => {
 
   // Content State
   const [extractedText, setExtractedText] = useState<string | null>(null);
+  // New: Store File URI for cloud-uploaded files
+  const [currentFileUri, setCurrentFileUri] = useState<string | null>(null);
   const [uploadedFileNames, setUploadedFileNames] = useState<string[]>([]);
 
   // Derived display name
@@ -50,6 +52,7 @@ const App: React.FC = () => {
       setErrorMsg(null);
       setShowOCR(false);
       setScannedPDF(null);
+      setCurrentFileUri(null); // Reset cloud file if new local upload
       
       if (!extractedText) {
         setHistoryQuestions([]);
@@ -103,6 +106,15 @@ const App: React.FC = () => {
     }
   };
 
+  const handleCloudUploadSuccess = (fileUri: string, fileName: string) => {
+    // Reset local text if switching to cloud file
+    setExtractedText(null); 
+    setHistoryQuestions([]);
+    setCurrentFileUri(fileUri);
+    setUploadedFileNames([fileName]);
+    setAppState(AppState.FILE_REVIEW);
+  };
+
   const handleOCRComplete = (text: string) => {
     setShowOCR(false);
     setScannedPDF(null);
@@ -122,7 +134,8 @@ const App: React.FC = () => {
   };
 
   const handleDifficultySelect = async (difficulty: DifficultyDistribution, source: GenerationSource, questionCount: number) => {
-    if (!extractedText || !extractedFileName) return;
+    // Allow proceeding if we have either text OR a cloud file uri
+    if ((!extractedText && !currentFileUri) || !extractedFileName) return;
 
     setCurrentDifficulty(difficulty);
     setCurrentSource(source);
@@ -141,6 +154,7 @@ const App: React.FC = () => {
       
       const data = await generateQuizFromText(
         extractedText, 
+        currentFileUri,
         extractedFileName, 
         difficulty, 
         source,
@@ -171,6 +185,7 @@ const App: React.FC = () => {
     setQuizData(null);
     setErrorMsg(null);
     setExtractedText(null);
+    setCurrentFileUri(null);
     setUploadedFileNames([]);
     setHistoryQuestions([]);
     setShowOCR(false);
@@ -248,7 +263,10 @@ const App: React.FC = () => {
                 Tạo bài kiểm tra từ PDF với sức mạnh trí tuệ nhân tạo Gemini.
               </p>
             </div>
-            <FileUpload onFileUpload={handleFileUpload} />
+            <FileUpload 
+              onFileUpload={handleFileUpload} 
+              onUploaded={handleCloudUploadSuccess}
+            />
           </div>
         )}
 
@@ -258,7 +276,11 @@ const App: React.FC = () => {
              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                 <div className="text-center mb-8">
                   <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <FileText className="w-8 h-8 text-green-600" />
+                    {currentFileUri ? (
+                       <Cloud className="w-8 h-8 text-green-600" />
+                    ) : (
+                       <FileText className="w-8 h-8 text-green-600" />
+                    )}
                   </div>
                   <h2 className="text-2xl font-bold text-slate-800 mb-2">Đã nhận tài liệu</h2>
                   <p className="text-slate-500">
@@ -269,8 +291,9 @@ const App: React.FC = () => {
                 <div className="bg-slate-50 rounded-xl border border-slate-200 mb-8 max-h-60 overflow-y-auto">
                   {uploadedFileNames.map((name, idx) => (
                     <div key={idx} className="p-3 border-b border-slate-100 last:border-0 flex items-center">
-                       <FileText className="w-4 h-4 text-slate-400 mr-3 shrink-0" />
+                       {currentFileUri ? <Cloud className="w-4 h-4 text-slate-400 mr-3 shrink-0" /> : <FileText className="w-4 h-4 text-slate-400 mr-3 shrink-0" />}
                        <span className="text-sm font-medium text-slate-700 truncate flex-1">{name}</span>
+                       {currentFileUri && <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded ml-2">Cloud</span>}
                     </div>
                   ))}
                 </div>
@@ -284,39 +307,44 @@ const App: React.FC = () => {
                     Tiếp tục cấu hình <ArrowRight className="w-5 h-5 ml-2" />
                   </button>
                   
-                  <div className="relative">
-                    <div className="absolute inset-0 flex items-center">
-                      <div className="w-full border-t border-slate-200"></div>
-                    </div>
-                    <div className="relative flex justify-center text-sm">
-                      <span className="px-2 bg-white text-slate-500">Hoặc</span>
-                    </div>
-                  </div>
+                  {/* Disable "Add More" if using Cloud File (Simplify logic for now) */}
+                  {!currentFileUri && (
+                    <>
+                      <div className="relative">
+                        <div className="absolute inset-0 flex items-center">
+                          <div className="w-full border-t border-slate-200"></div>
+                        </div>
+                        <div className="relative flex justify-center text-sm">
+                          <span className="px-2 bg-white text-slate-500">Hoặc</span>
+                        </div>
+                      </div>
 
-                  {/* Option 2: Add More Files */}
-                  <div>
-                    <p className="text-center text-sm text-slate-500 mb-3 font-medium">Bạn muốn bổ sung thêm tài liệu?</p>
-                    <div className="border-2 border-dashed border-slate-300 rounded-xl p-6 bg-slate-50 hover:bg-white hover:border-primary-400 transition-colors text-center cursor-pointer group">
-                       <label className="cursor-pointer block w-full h-full">
-                          <input 
-                             type="file" 
-                             className="hidden" 
-                             accept=".pdf"
-                             multiple
-                             onChange={(e) => {
-                                if (e.target.files && e.target.files.length > 0) {
-                                  handleFileUpload(Array.from(e.target.files));
-                                }
-                             }}
-                          />
-                          <div className="flex flex-col items-center justify-center">
-                             <Plus className="w-8 h-8 text-slate-400 group-hover:text-primary-500 mb-2" />
-                             <span className="text-slate-600 font-bold group-hover:text-primary-700">Tải thêm file PDF</span>
-                             <span className="text-xs text-slate-400 mt-1">Kéo thả hoặc nhấn để chọn</span>
-                          </div>
-                       </label>
-                    </div>
-                  </div>
+                      {/* Option 2: Add More Files (Local only) */}
+                      <div>
+                        <p className="text-center text-sm text-slate-500 mb-3 font-medium">Bạn muốn bổ sung thêm tài liệu?</p>
+                        <div className="border-2 border-dashed border-slate-300 rounded-xl p-6 bg-slate-50 hover:bg-white hover:border-primary-400 transition-colors text-center cursor-pointer group">
+                          <label className="cursor-pointer block w-full h-full">
+                              <input 
+                                type="file" 
+                                className="hidden" 
+                                accept=".pdf"
+                                multiple
+                                onChange={(e) => {
+                                    if (e.target.files && e.target.files.length > 0) {
+                                      handleFileUpload(Array.from(e.target.files));
+                                    }
+                                }}
+                              />
+                              <div className="flex flex-col items-center justify-center">
+                                <Plus className="w-8 h-8 text-slate-400 group-hover:text-primary-500 mb-2" />
+                                <span className="text-slate-600 font-bold group-hover:text-primary-700">Tải thêm file PDF</span>
+                                <span className="text-xs text-slate-400 mt-1">Kéo thả hoặc nhấn để chọn</span>
+                              </div>
+                          </label>
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
              </div>
           </div>

@@ -1,17 +1,25 @@
-
-import React, { useCallback, useState } from 'react';
-import { Upload, FileText, AlertCircle, Loader2, Files } from 'lucide-react';
+import React, { useCallback, useState, useRef } from 'react';
+import { Upload, FileText, AlertCircle, Loader2, Files, CloudUpload, X, CheckCircle2 } from 'lucide-react';
+import { uploadToGeminiFiles } from '../services/geminiUploadSamples';
 
 interface FileUploadProps {
   onFileUpload: (files: File[]) => void;
+  onUploaded?: (fileUri: string, fileName: string) => void;
   isLoading?: boolean;
 }
 
-const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isLoading = false }) => {
+const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, onUploaded, isLoading = false }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isDriveProcessing, setIsDriveProcessing] = useState(false);
+  
+  // Cloud Upload State
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadSuccessUri, setUploadSuccessUri] = useState<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
+  // --- Drag & Drop Handlers ---
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(true);
@@ -22,7 +30,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isLoading = false
     setIsDragging(false);
   }, []);
 
-  const validateAndUpload = (fileList: FileList | File[]) => {
+  const validateAndUploadLocal = (fileList: FileList | File[]) => {
     const files = Array.from(fileList);
     const validFiles: File[] = [];
     const errors: string[] = [];
@@ -34,7 +42,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isLoading = false
         errors.push(`"${file.name}" không phải là PDF`);
         continue;
       }
-      if (file.size > 20 * 1024 * 1024) { // 20MB limit per file
+      if (file.size > 20 * 1024 * 1024) { // 20MB limit for local processing
         errors.push(`"${file.name}" quá lớn (>20MB)`);
         continue;
       }
@@ -46,8 +54,6 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isLoading = false
        return;
     }
 
-    // If some files were rejected but others are valid, we proceed but maybe log or alert?
-    // For now, clear error and proceed with valid ones to be user-friendly.
     if (errors.length > 0) {
       console.warn("Some files were rejected:", errors);
     }
@@ -59,19 +65,109 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isLoading = false
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      validateAndUpload(e.dataTransfer.files);
+      validateAndUploadLocal(e.dataTransfer.files);
     }
   }, [onFileUpload]);
 
-  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleLocalFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      validateAndUpload(e.target.files);
+      validateAndUploadLocal(e.target.files);
     }
   };
 
-  // --- Google Drive Integration ---
+  // --- Gemini Cloud Upload Handlers ---
+  const handleCloudUploadSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validation
+    if (file.type !== 'application/pdf') {
+      setError("Chỉ hỗ trợ file PDF.");
+      return;
+    }
+    if (file.size > 50 * 1024 * 1024) { // 50MB Limit
+      setError("File quá lớn (>50MB).");
+      return;
+    }
+
+    // Reset State
+    setError(null);
+    setUploadSuccessUri(null);
+    setIsUploading(true);
+    setUploadProgress(0);
+    
+    // Setup AbortController
+    abortControllerRef.current = new AbortController();
+
+    try {
+      const result = await uploadToGeminiFiles(
+        file,
+        (percent) => setUploadProgress(percent),
+        abortControllerRef.current.signal
+      );
+      
+      setUploadSuccessUri(result.fileUri);
+      if (onUploaded) {
+        onUploaded(result.fileUri, file.name);
+      }
+    } catch (err: any) {
+      console.error("Gemini Upload Error:", err);
+      
+      let friendlyMessage = "Lỗi tải lên máy chủ Gemini.";
+      
+      // Error Mapping based on codes from services/geminiUploadSamples.ts
+      switch (err.code) {
+        case 'UPLOAD_ABORTED':
+          friendlyMessage = "Đã hủy quá trình tải lên.";
+          break;
+        case 'CONFIG_ERROR':
+          friendlyMessage = "Lỗi cấu hình: Không tìm thấy API Key. Vui lòng kiểm tra biến môi trường.";
+          break;
+        case 'NETWORK_ERROR':
+          friendlyMessage = "Lỗi kết nối mạng. Vui lòng kiểm tra internet, tường lửa hoặc VPN.";
+          break;
+        case 'INIT_FAILED':
+          if (err.message?.includes('403')) {
+            friendlyMessage = "Không có quyền truy cập (403). API Key không hợp lệ hoặc chưa bật 'Generative Language API' trong Google Cloud Console.";
+          } else if (err.message?.includes('400')) {
+             friendlyMessage = "Yêu cầu không hợp lệ. File có thể bị lỗi hoặc định dạng metadata sai.";
+          } else {
+             friendlyMessage = "Không thể khởi tạo phiên tải lên với Google. Vui lòng thử lại sau.";
+          }
+          break;
+        case 'UPLOAD_FAILED':
+           if (err.message?.includes('404')) {
+             friendlyMessage = "Lỗi máy chủ (404): Không tìm thấy đường dẫn tải lên. Phiên làm việc có thể đã hết hạn.";
+           } else if (err.message?.includes('413')) {
+             friendlyMessage = "File quá lớn so với giới hạn của Google API.";
+           } else {
+             friendlyMessage = "Quá trình gửi dữ liệu bị gián đoạn. Vui lòng thử lại.";
+           }
+           break;
+        case 'PROTOCOL_ERROR':
+           friendlyMessage = "Phản hồi từ máy chủ không hợp lệ.";
+           break;
+        default:
+          friendlyMessage = err.message || "Đã xảy ra lỗi không xác định khi tải lên đám mây.";
+      }
+      
+      setError(friendlyMessage);
+    } finally {
+      setIsUploading(false);
+      abortControllerRef.current = null;
+      // Reset file input
+      e.target.value = '';
+    }
+  };
+
+  const cancelUpload = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+  };
+
+  // --- Google Drive Integration (Existing) ---
   const handleDriveUpload = async () => {
     const API_KEY = process.env.API_KEY;
     
@@ -111,7 +207,6 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isLoading = false
         scope: 'https://www.googleapis.com/auth/drive.readonly',
         callback: async (response: any) => {
           if (response.error !== undefined) {
-             console.error(response);
              setIsDriveProcessing(false);
              if (response.error === 'popup_closed_by_user') return;
              setError(`Lỗi xác thực: ${response.error}`);
@@ -140,7 +235,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isLoading = false
                             downloadedFiles.push(new File([blob], name, { type: 'application/pdf' }));
                         }
                         setIsDriveProcessing(false);
-                        validateAndUpload(downloadedFiles);
+                        validateAndUploadLocal(downloadedFiles);
                       } catch (downloadErr) {
                          console.error(downloadErr);
                          setError("Không thể tải nội dung file từ Drive.");
@@ -163,7 +258,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isLoading = false
     }
   };
 
-  const isBusy = isLoading || isDriveProcessing;
+  const isBusy = isLoading || isDriveProcessing || isUploading;
 
   return (
     <div className="w-full max-w-2xl mx-auto">
@@ -177,9 +272,30 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isLoading = false
             ? 'border-primary-500 bg-primary-50' 
             : 'border-slate-300 hover:border-primary-400 hover:bg-slate-50'
           }
-          ${isBusy ? 'opacity-50 pointer-events-none' : ''}
+          ${isBusy ? 'opacity-90' : ''}
         `}
       >
+        {/* Upload Progress Overlay */}
+        {isUploading && (
+          <div className="absolute inset-0 bg-white/90 z-20 flex flex-col items-center justify-center rounded-xl p-6">
+            <Loader2 className="w-10 h-10 text-primary-600 animate-spin mb-4" />
+            <h3 className="font-bold text-slate-800 mb-2">Đang tải lên Gemini Cloud...</h3>
+            <div className="w-full max-w-xs bg-slate-200 rounded-full h-2 mb-2">
+              <div 
+                className="bg-primary-600 h-2 rounded-full transition-all duration-300" 
+                style={{ width: `${uploadProgress}%` }}
+              ></div>
+            </div>
+            <p className="text-sm text-slate-500 mb-4">{Math.round(uploadProgress)}%</p>
+            <button 
+              onClick={cancelUpload}
+              className="px-4 py-2 border border-red-200 text-red-600 rounded-lg hover:bg-red-50 text-sm font-medium flex items-center"
+            >
+              <X className="w-4 h-4 mr-2" /> Hủy
+            </button>
+          </div>
+        )}
+
         <div className="flex flex-col items-center justify-center space-y-4">
           <div className="p-4 bg-white rounded-full shadow-sm">
             {isBusy ? (
@@ -204,23 +320,25 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isLoading = false
             </p>
           </div>
 
-          <div className="flex flex-col sm:flex-row gap-4 mt-2">
-            <label className="inline-flex items-center justify-center px-6 py-3 bg-primary-600 text-white font-medium rounded-lg hover:bg-primary-700 cursor-pointer transition-colors shadow-sm">
-              <span>Chọn các File PDF</span>
+          <div className="flex flex-col sm:flex-row gap-3 mt-2 flex-wrap justify-center">
+            {/* Local Upload */}
+            <label className={`inline-flex items-center justify-center px-5 py-3 bg-primary-600 text-white font-medium rounded-lg hover:bg-primary-700 cursor-pointer transition-colors shadow-sm ${isBusy ? 'opacity-50 pointer-events-none' : ''}`}>
+              <span>Chọn PDF</span>
               <input 
                 type="file" 
                 className="hidden" 
                 accept=".pdf"
                 multiple
-                onChange={handleFileInput}
+                onChange={handleLocalFileInput}
                 disabled={isBusy}
               />
             </label>
 
+            {/* Google Drive */}
             <button
               onClick={handleDriveUpload}
               disabled={isBusy}
-              className="inline-flex items-center justify-center px-6 py-3 bg-white border border-slate-300 text-slate-700 font-medium rounded-lg hover:bg-slate-50 transition-colors shadow-sm"
+              className="inline-flex items-center justify-center px-5 py-3 bg-white border border-slate-300 text-slate-700 font-medium rounded-lg hover:bg-slate-50 transition-colors shadow-sm"
             >
               <svg className="w-5 h-5 mr-2" viewBox="0 0 87.3 78" xmlns="http://www.w3.org/2000/svg">
                 <path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8h-27.5c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/>
@@ -230,15 +348,35 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isLoading = false
                 <path d="m59.8 53h-27.5l-13.75 23.8 13.75 23.8c1.55 0 3.1-.4 4.5-1.2l45.5-26.3c1.4-.8 2.5-1.95 3.3-3.3l-13.75-23.8z" fill="#2684fc"/>
                 <path d="m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3h-26.25l13.75 23.8 27.5 47.6c1.4-.8 2.5-1.9 3.3-3.3z" fill="#ffba00"/>
               </svg>
-              <span>Google Drive</span>
+              <span>Drive</span>
             </button>
+            
+            {/* Gemini Cloud Upload (New Feature) */}
+            <label className={`inline-flex items-center justify-center px-5 py-3 bg-indigo-50 border border-indigo-200 text-indigo-700 font-medium rounded-lg hover:bg-indigo-100 cursor-pointer transition-colors shadow-sm ${isBusy ? 'opacity-50 pointer-events-none' : ''}`}>
+              <CloudUpload className="w-5 h-5 mr-2" />
+              <span>Upload to Gemini</span>
+              <input 
+                type="file" 
+                className="hidden" 
+                accept=".pdf"
+                onChange={handleCloudUploadSelect}
+                disabled={isBusy}
+              />
+            </label>
           </div>
         </div>
 
         {error && (
-          <div className="absolute -bottom-20 md:-bottom-16 left-0 right-0 flex items-center justify-center space-x-2 text-red-500 bg-red-50 p-3 rounded-lg border border-red-200 animate-in fade-in slide-in-from-top-2">
+          <div className="absolute -bottom-20 md:-bottom-24 left-0 right-0 flex items-center justify-center space-x-2 text-red-500 bg-red-50 p-3 rounded-lg border border-red-200 animate-in fade-in slide-in-from-top-2 z-10 shadow-md">
             <AlertCircle className="w-5 h-5 flex-shrink-0" />
-            <span className="text-sm font-medium">{error}</span>
+            <span className="text-sm font-medium break-words text-left">{error}</span>
+          </div>
+        )}
+
+        {uploadSuccessUri && (
+           <div className="absolute -bottom-20 md:-bottom-16 left-0 right-0 flex items-center justify-center space-x-2 text-green-600 bg-green-50 p-3 rounded-lg border border-green-200 animate-in fade-in slide-in-from-top-2">
+            <CheckCircle2 className="w-5 h-5 flex-shrink-0" />
+            <span className="text-sm font-medium">Upload thành công! URI: {uploadSuccessUri.substring(0, 15)}...</span>
           </div>
         )}
       </div>

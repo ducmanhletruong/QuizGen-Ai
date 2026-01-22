@@ -55,12 +55,10 @@ const quizSchema: Schema = {
   required: ["file_name", "total_questions", "chapters"],
 };
 
-/**
- * Simplified config: Just return generic types to avoid conflicting with user quantity requests.
- */
-const getContextLabel = (textLength: number, source: GenerationSource) => {
+const getContextLabel = (lengthOrType: number | string, source: GenerationSource) => {
   if (source === 'web') return "Web Search Topic";
-  return "Document Context"; // Removed "Short/Long Document" labels to prevent AI bias
+  if (typeof lengthOrType === 'string') return "Cloud File";
+  return "Document Context";
 };
 
 const getDifficultyInstruction = (difficulty: DifficultyDistribution): string => {
@@ -78,11 +76,22 @@ const getDifficultyInstruction = (difficulty: DifficultyDistribution): string =>
 /**
  * Helper to identify the main topic from the text (used for Web search mode)
  */
-const identifyMainTopic = async (ai: GoogleGenAI, text: string): Promise<string> => {
+const identifyMainTopic = async (ai: GoogleGenAI, input: string | { fileUri: string, mimeType: string }): Promise<string> => {
   try {
+    const contentPart = typeof input === 'string' 
+      ? { text: `Identify the main technical subject of the following text in 5 words or less. Return ONLY the topic name in Vietnamese.\n\nText preview: ${input.substring(0, 3000)}...` }
+      : { 
+          // For file inputs, we ask based on the file.
+          text: "Identify the main technical subject of this document in 5 words or less. Return ONLY the topic name in Vietnamese." 
+        };
+
+    const parts: any[] = typeof input === 'string' 
+      ? [contentPart] 
+      : [{ fileData: input }, contentPart];
+
     const response = await ai.models.generateContent({
       model: MODEL_NAME,
-      contents: `Identify the main technical subject or central topic of the following text in 5 words or less. Return ONLY the topic name in Vietnamese.\n\nText preview: ${text.substring(0, 3000)}...`,
+      contents: [{ role: 'user', parts }],
       config: { temperature: 0.1 }
     });
     return response.text?.trim() || "Kiến thức tổng hợp";
@@ -93,7 +102,8 @@ const identifyMainTopic = async (ai: GoogleGenAI, text: string): Promise<string>
 };
 
 export const generateQuizFromText = async (
-  text: string, 
+  text: string | null,
+  fileUri: string | null,
   fileName: string, 
   difficulty: DifficultyDistribution, 
   source: GenerationSource = 'document',
@@ -101,15 +111,12 @@ export const generateQuizFromText = async (
   targetQuestionCount?: number
 ): Promise<QuizData> => {
   const ai = getClient();
-  const contextLabel = getContextLabel(text.length, source);
   const difficultyInstruction = getDifficultyInstruction(difficulty);
 
-  // 1. Determine Count: Strict priority to user input
-  // Default to 20 if not specified
+  // 1. Determine Count
   const finalQuestionCount = targetQuestionCount ? targetQuestionCount.toString() : "20";
   const numQuestions = parseInt(finalQuestionCount);
 
-  let finalPrompt = "";
   let toolsConfig = undefined;
   
   // 2. Avoidance Logic
@@ -138,8 +145,7 @@ export const generateQuizFromText = async (
   - Homogeneity: Distractors must be plausible and semantically similar.
   `;
 
-  // 5. Count & Volume Logic (CRITICAL FIX FOR 50 QUESTIONS)
-  // With 65k tokens, we can be verbose, but we must emphasize quantity.
+  // 5. Volume Logic
   const volumeInstruction = `
   VOLUME REQUIREMENT (CRITICAL):
   - You MUST generate EXACTLY ${finalQuestionCount} questions.
@@ -153,36 +159,64 @@ export const generateQuizFromText = async (
   - DO NOT bias towards 'A'.
   `;
 
-  // 6. Source-Specific Logic
+  // 6. Source-Specific Logic & Prompt Assembly
   let contextInstruction = "";
+  let parts: any[] = [];
+
   if (source === 'web') {
-    const mainTopic = await identifyMainTopic(ai, text);
+    // WEB SEARCH MODE
+    let mainTopic = "Kiến thức tổng hợp";
+    if (fileUri) {
+      mainTopic = await identifyMainTopic(ai, { fileUri, mimeType: 'application/pdf' });
+    } else if (text) {
+      mainTopic = await identifyMainTopic(ai, text);
+    }
+    
     console.log("Extracted Topic for Search:", mainTopic);
     contextInstruction = `
       Task: Generate a quiz about topic: "${mainTopic}".
       Source: Use "googleSearch" to find LATEST info.
-      Context: ${fileName}
+      Context Reference: ${fileName}
     `;
     toolsConfig = [{ googleSearch: {} }];
+    
+    // For Web Search, we strictly use text prompt instructions to drive the search, 
+    // but we can include the file context as reference if it exists.
+    parts.push({ text: contextInstruction });
+
   } else {
-    // Truncate extremely long text to avoid input token limits (though Flash has a huge window)
-    const MAX_SAFE_CHARS = 800000; 
-    let processText = text;
-    if (text.length > MAX_SAFE_CHARS) {
-      processText = text.substring(0, MAX_SAFE_CHARS) + "\n...[TRUNCATED]...";
-    }
+    // DOCUMENT MODE
     contextInstruction = `
       Task: Generate a quiz based on the provided document.
-      File Name: ${fileName} (${contextLabel})
-      Content:
-      ${processText}
+      File Name: ${fileName}
     `;
+
+    if (fileUri) {
+      // Use File Data
+      parts.push({
+        fileData: {
+          mimeType: 'application/pdf',
+          fileUri: fileUri
+        }
+      });
+      parts.push({ text: contextInstruction });
+    } else if (text) {
+      // Use Text Data
+      const MAX_SAFE_CHARS = 800000; 
+      let processText = text;
+      if (text.length > MAX_SAFE_CHARS) {
+        processText = text.substring(0, MAX_SAFE_CHARS) + "\n...[TRUNCATED]...";
+      }
+      parts.push({ 
+        text: `${contextInstruction}\n\nContent:\n${processText}` 
+      });
+    } else {
+      throw new Error("No text or file provided for generation.");
+    }
   }
 
-  // 7. Assemble Prompt
-  finalPrompt = `
-    ${contextInstruction}
-
+  // 7. Final Instructions
+  const finalInstructions = `
     CONFIGURATION:
     - Target Count: ${finalQuestionCount}
     - ${difficultyInstruction}
@@ -195,18 +229,24 @@ export const generateQuizFromText = async (
     ${avoidanceInstruction}
   `;
 
+  // Add instructions to parts
+  parts.push({ text: finalInstructions });
+
   // Helper function to make the API call
   const attemptGeneration = async (targetCount: string, instructionOverride?: string) => {
-    const currentPrompt = instructionOverride ? finalPrompt + `\n\nIMPORTANT: ${instructionOverride}` : finalPrompt;
+    // Clone parts to avoid mutating for retries
+    const currentParts = [...parts];
+    if (instructionOverride) {
+      currentParts.push({ text: `\n\nIMPORTANT: ${instructionOverride}` });
+    }
 
     const response = await ai.models.generateContent({
       model: MODEL_NAME,
-      contents: [{ role: 'user', parts: [{ text: currentPrompt }] }],
+      contents: [{ role: 'user', parts: currentParts }],
       config: {
         systemInstruction: SYSTEM_PROMPT,
         responseMimeType: "application/json",
         responseSchema: quizSchema,
-        // CRITICAL UPDATE: Set to 65536 to prevent cutting off large question sets
         maxOutputTokens: 65536, 
         temperature: 0.5,
         tools: toolsConfig,
@@ -216,13 +256,11 @@ export const generateQuizFromText = async (
     let jsonText = response.text;
     if (!jsonText) throw new Error("No response generated from AI");
     
-    // Improved Parsing Logic: Handle Code Blocks and Extract JSON Object
-    // 1. Strip markdown code blocks if present
+    // Parsing Logic
     if (jsonText.includes("```")) {
        jsonText = jsonText.replace(/```json/gi, "").replace(/```/g, "");
     }
     
-    // 2. Locate the first '{' and last '}' to strip any prologue/epilogue text
     const firstBrace = jsonText.indexOf('{');
     const lastBrace = jsonText.lastIndexOf('}');
     
@@ -250,30 +288,19 @@ export const generateQuizFromText = async (
     return data;
 
   } catch (error: any) {
-    // Retry Logic
     if (error instanceof SyntaxError || error.message.includes('JSON')) {
-      console.warn(`JSON Parse failed for ${finalQuestionCount} questions. Retrying...`);
-      
-      // Attempt 1: Retry SAME count. With 65k tokens, failures are likely due to syntax, not length.
+      console.warn(`JSON Parse failed. Retrying...`);
       try {
         const retryPrompt = `
         ERROR RECOVERY: Previous response was invalid JSON.
         1. YOU MUST GENERATE EXACTLY ${finalQuestionCount} QUESTIONS.
         2. CHECK JSON SYNTAX CAREFULLY.
         `;
-        const retryData = await attemptGeneration(finalQuestionCount, retryPrompt);
-        return retryData;
+        return await attemptGeneration(finalQuestionCount, retryPrompt);
       } catch (retryError) {
-        
-        // Attempt 2: Only fallback if absolutely necessary.
-        // If 50 fails twice, try 40 (instead of dropping to 20).
         const fallbackCount = Math.max(20, Math.floor(numQuestions * 0.8)).toString();
-        
-        console.warn(`Retry failed. Falling back to ${fallbackCount} questions.`);
-        
         try {
-           const fallbackData = await attemptGeneration(fallbackCount, `CRITICAL: Previous attempts failed. Reduce count to ${fallbackCount}. Ensure valid JSON.`);
-           return fallbackData;
+           return await attemptGeneration(fallbackCount, `CRITICAL: Previous attempts failed. Reduce count to ${fallbackCount}. Ensure valid JSON.`);
         } catch (finalError) {
            throw new Error("Không thể tạo số lượng câu hỏi lớn. Vui lòng thử lại với số lượng ít hơn.");
         }

@@ -1,0 +1,8 @@
+feat(upload): add direct upload to Gemini Files API with progress tracking
+
+Added a "Upload to Gemini" button to the FileUpload component. This allows users to bypass local processing and upload PDFs directly to Google's GenAI Files API.
+- Implemented `uploadToGeminiFiles` service using XMLHttpRequest to support upload progress bars.
+- Updated UI to show a progress overlay, cancel button, and success/error states.
+- Handled the resumable upload protocol required by the API.
+
+RISKS: The Files API has specific retention policies (usually 48 hours for temporary files). Ensure users are aware that uploaded content is processed by Google. Large files (>50MB) are currently restricted in the frontend validation to ensure browser stability during upload.
