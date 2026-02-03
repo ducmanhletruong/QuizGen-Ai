@@ -64,12 +64,12 @@ const getContextLabel = (lengthOrType: number | string, source: GenerationSource
 const getDifficultyInstruction = (difficulty: DifficultyDistribution): string => {
   switch (difficulty) {
     case 'beginner':
-      return "Difficulty distribution: Easy: ~60%, Medium: ~30%, Hard: ~10%. Focus on basic definitions.";
+      return "Difficulty: Mostly Recall/Understanding. Focus on definitions and basic facts.";
     case 'expert':
-      return "Difficulty distribution: Easy: ~10%, Medium: ~40%, Hard: ~50%. Focus on analysis and edge cases.";
+      return "Difficulty: HARD/EXPERT. Focus on Application, Analysis, and Evaluation (Bloom's Taxonomy). Use complex scenarios and 'Best Fit' logic.";
     case 'balanced':
     default:
-      return "Difficulty distribution: Easy: ~30%, Medium: ~50%, Hard: ~20%.";
+      return "Difficulty: Mixed. 30% Recall, 50% Application/Understanding, 20% Analysis/Trick questions.";
   }
 };
 
@@ -126,7 +126,7 @@ export const generateQuizFromText = async (
     avoidanceInstruction = `
     CRITICAL - DUPLICATE PREVENTION:
     DO NOT generate questions identical/similar to: [${historySlice}]
-    Create COMPLETELY NEW questions.
+    Create COMPLETELY NEW questions checking different aspects/details.
     `;
   }
 
@@ -138,11 +138,14 @@ export const generateQuizFromText = async (
   - Use $$ for block equations, $ for inline.
   `;
 
-  // 4. Hard Question Logic
-  const hardQuestionsInstruction = `
-  DIFFICULTY RULES:
-  - Uniform Length: Correct answer must not be the longest option.
-  - Homogeneity: Distractors must be plausible and semantically similar.
+  // 4. Advanced Question Logic (Difficulty & Variety)
+  const questionQualityInstruction = `
+  QUESTION VARIETY & LOGIC:
+  - **Scenario-based**: "Given situation X, what is the best outcome?"
+  - **Negative**: "Which of the following is NOT true?" or "All are true EXCEPT..."
+  - **Synthesis**: "Which statement best summarizes..."
+  - **Trap Answers**: Distractors must be highly plausible. 
+  - **Avoid**: Trivial or obvious questions. 
   `;
 
   // 5. Volume Logic
@@ -153,13 +156,16 @@ export const generateQuizFromText = async (
   - DO NOT STOP until you reach ${finalQuestionCount} questions.
   `;
 
-  const randomizationInstruction = `
-  RANDOMIZATION:
-  - Shuffle correct answer positions (A, B, C, D).
-  - DO NOT bias towards 'A'.
+  // 6. Strict Distribution Enforcement
+  const distributionInstruction = `
+  STRICT RANDOMIZATION ENFORCEMENT:
+  - It is unacceptable to have correct answers clustered on 'B' or 'C'.
+  - You MUST shuffle the correct answer slot for every question.
+  - Final Output Goal: ~25% A, ~25% B, ~25% C, ~25% D.
+  - Verify this distribution before outputting JSON.
   `;
 
-  // 6. Source-Specific Logic & Prompt Assembly
+  // 7. Source-Specific Logic & Prompt Assembly
   let contextInstruction = "";
   let parts: any[] = [];
 
@@ -179,20 +185,16 @@ export const generateQuizFromText = async (
       Context Reference: ${fileName}
     `;
     toolsConfig = [{ googleSearch: {} }];
-    
-    // For Web Search, we strictly use text prompt instructions to drive the search, 
-    // but we can include the file context as reference if it exists.
     parts.push({ text: contextInstruction });
 
   } else {
     // DOCUMENT MODE
     contextInstruction = `
-      Task: Generate a quiz based on the provided document.
+      Task: Generate a high-quality quiz based on the provided document.
       File Name: ${fileName}
     `;
 
     if (fileUri) {
-      // Use File Data
       parts.push({
         fileData: {
           mimeType: 'application/pdf',
@@ -201,7 +203,6 @@ export const generateQuizFromText = async (
       });
       parts.push({ text: contextInstruction });
     } else if (text) {
-      // Use Text Data
       const MAX_SAFE_CHARS = 800000; 
       let processText = text;
       if (text.length > MAX_SAFE_CHARS) {
@@ -215,7 +216,7 @@ export const generateQuizFromText = async (
     }
   }
 
-  // 7. Final Instructions
+  // 8. Final Instructions
   const finalInstructions = `
     CONFIGURATION:
     - Target Count: ${finalQuestionCount}
@@ -223,18 +224,16 @@ export const generateQuizFromText = async (
 
     RULES:
     ${volumeInstruction}
-    ${hardQuestionsInstruction}
-    ${randomizationInstruction}
+    ${questionQualityInstruction}
+    ${distributionInstruction}
     ${latexInstruction}
     ${avoidanceInstruction}
   `;
 
-  // Add instructions to parts
   parts.push({ text: finalInstructions });
 
   // Helper function to make the API call
   const attemptGeneration = async (targetCount: string, instructionOverride?: string) => {
-    // Clone parts to avoid mutating for retries
     const currentParts = [...parts];
     if (instructionOverride) {
       currentParts.push({ text: `\n\nIMPORTANT: ${instructionOverride}` });
@@ -248,7 +247,7 @@ export const generateQuizFromText = async (
         responseMimeType: "application/json",
         responseSchema: quizSchema,
         maxOutputTokens: 65536, 
-        temperature: 0.5,
+        temperature: 0.7, // Increased from 0.5 to 0.7 for more variety in distractors and sentence structure
         tools: toolsConfig,
       }
     });

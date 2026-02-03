@@ -68,7 +68,9 @@ const App: React.FC = () => {
         setStatusMsg(`Đang đọc file ${i + 1}/${files.length}: ${file.name}...`);
         
         try {
-          const { text, pdfDoc } = await extractTextFromPDF(file);
+          const { text, pdfDoc } = await extractTextFromPDF(file, {
+            onProgress: (p) => setStatusMsg(`Đang đọc file ${file.name} (${p}%)`)
+          });
           if (text && text.trim().length >= 50) {
             newCombinedText += `\n\n=== FILE BẮT ĐẦU: ${file.name} ===\n${text}\n=== FILE KẾT THÚC: ${file.name} ===\n`;
             validFiles.push(file.name);
@@ -86,6 +88,8 @@ const App: React.FC = () => {
              return; // Stop processing and wait for user OCR decision
           }
           console.warn(`Lỗi đọc file ${file.name}`, fileErr);
+          // If singular file failed with specific error, rethrow to show UI error
+          if (files.length === 1) throw fileErr;
           failedFiles.push(file.name);
         }
       }
@@ -414,6 +418,11 @@ const App: React.FC = () => {
                       title = "Không nhận diện được";
                       suggestion = "Quá trình OCR thất bại hoặc bạn đã hủy. Vui lòng thử file khác.";
                       bgColor = "bg-orange-50";
+                   } else if (msg.includes("encoding") || msg.includes("font") || msg.includes("giải mã")) {
+                       icon = <FileText className="w-8 h-8 md:w-10 md:h-10 text-slate-600" />;
+                       title = "Lỗi Font chữ";
+                       suggestion = "PDF sử dụng font chữ không chuẩn hoặc bị mã hóa. Hãy thử chuyển sang định dạng Word hoặc OCR.";
+                       bgColor = "bg-slate-100";
                    } else if (msg.includes("quá lớn") || msg.includes("limit")) {
                        icon = <FileWarning className="w-8 h-8 md:w-10 md:h-10 text-blue-600" />;
                        title = "File quá lớn";

@@ -4,7 +4,7 @@ import { runOCRFromPDF } from './ocrUtils';
 const CDN_BASE = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${version}`;
 GlobalWorkerOptions.workerSrc = `${CDN_BASE}/build/pdf.worker.min.mjs`;
 
-// Preload worker
+// Preload worker to avoid delay on first use
 try {
   fetch(GlobalWorkerOptions.workerSrc, { method: 'HEAD', mode: 'cors' }).catch(() => {});
 } catch (e) {
@@ -38,12 +38,25 @@ export const extractTextFromPDF = async (
   try {
     const arrayBuffer = await file.arrayBuffer();
     
+    if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+      throw new Error("File trống (0 bytes).");
+    }
+
     const loadingTask = getDocument({
       data: arrayBuffer,
       cMapUrl: `${CDN_BASE}/cmaps/`,
       cMapPacked: true,
       standardFontDataUrl: `${CDN_BASE}/standard_fonts/`,
     });
+
+    // Report loading progress (0-20%)
+    if (options.onProgress) {
+        loadingTask.onProgress = (p) => {
+            if (p.total > 0) {
+                 options.onProgress!(Math.round((p.loaded / p.total) * 20));
+            }
+        };
+    }
 
     const pdf = await loadingTask.promise;
     
@@ -58,7 +71,18 @@ export const extractTextFromPDF = async (
     for (let i = 1; i <= pdf.numPages; i++) {
       try {
         const page = await pdf.getPage(i);
-        const textContent = await page.getTextContent();
+        
+        // Timeout race condition for stuck pages
+        const textContentPromise = page.getTextContent();
+        const textContent = await Promise.race([
+            textContentPromise,
+            new Promise<any>((_, reject) => setTimeout(() => reject(new Error("Timeout")), 5000))
+        ]).catch(e => {
+            console.warn(`Page ${i} extraction timed out or failed`, e);
+            return { items: [] }; 
+        });
+
+        if (!textContent.items) textContent.items = [];
         
         const meaningfulItems = textContent.items.filter((item: any) => (item.str || '').trim().length > 0);
         totalItems += meaningfulItems.length;
@@ -75,6 +99,13 @@ export const extractTextFromPDF = async (
         if (cleanedPageText.length > 0) {
           fullText += `--- Page ${i} ---\n${cleanedPageText}\n\n`;
         }
+
+        // Report extraction progress (20-100%)
+        if (options.onProgress) {
+            const percentage = 20 + Math.floor((i / pdf.numPages) * 80);
+            options.onProgress(percentage);
+        }
+
       } catch (pageError) {
         console.warn(`Warning: Could not extract text from page ${i}`, pageError);
       }
@@ -82,21 +113,21 @@ export const extractTextFromPDF = async (
 
     const trimmedText = fullText.trim();
     
-    // Scanned PDF Detection
-    if (trimmedText.length < 50) {
-        if (totalItems < 10) {
-            // Case 1: Scanned PDF (OCR required)
+    // Low Density / Scanned Detection
+    const MIN_CHARS_TOTAL = 100;
+    const MIN_ITEMS_TOTAL = 10;
+
+    if (trimmedText.length < MIN_CHARS_TOTAL) {
+        if (totalItems < MIN_ITEMS_TOTAL) {
+            // Case 1: Scanned PDF (Almost no text layer)
             if (options.enableOCR) {
               console.log("Scanned PDF detected. Starting OCR...");
               try {
                 const ocrText = await runOCRFromPDF(pdf, {
                   onProgress: options.onProgress,
-                  // Pass a signal if we extended extractTextFromPDF to support cancellation
                 });
                 return { text: ocrText, pdfDoc: pdf };
               } catch (ocrError: any) {
-                // If OCR fails or is cancelled, we still might want to throw the specific error
-                // so the UI knows it was a scanned file issue.
                 throw new Error(`OCR thất bại: ${ocrError.message}`);
               }
             }
@@ -106,10 +137,11 @@ export const extractTextFromPDF = async (
             error.code = "PDF_SCANNED";
             error.pdfDoc = pdf; // Pass the loaded PDF document to avoid re-parsing
             throw error;
+        } else {
+            // Case 2: Encoding/Font Issue (Items exist but empty text)
+            console.warn("PDF extraction found items but text is mostly empty. Items count:", totalItems);
+            throw new Error("Lỗi Font/Encoding: Văn bản không thể giải mã. Có thể PDF bị mã hóa hoặc dùng font không chuẩn.");
         }
-        
-        console.warn("PDF extraction found items but text is mostly empty. Items count:", totalItems);
-        throw new Error("Không thể giải mã văn bản (Lỗi Font/Encoding).");
     }
 
     return { text: fullText, pdfDoc: pdf };
@@ -122,14 +154,14 @@ export const extractTextFromPDF = async (
       throw error;
     }
 
-    if (error.name === 'PasswordException' || error.message?.includes('Password')) {
-        throw new Error("File PDF được bảo vệ bằng mật khẩu.");
+    if (error.name === 'PasswordException' || error.message?.toLowerCase().includes('password')) {
+        throw new Error("File PDF được bảo vệ bằng mật khẩu. Vui lòng mở khóa file trước khi tải lên.");
     }
-    if (error.name === 'InvalidPDFException') {
+    if (error.name === 'InvalidPDFException' || error.name === 'FormatError') {
         throw new Error("File không đúng định dạng PDF hoặc bị hỏng.");
     }
-    if (error.message?.includes('Failed to fetch') || error.message?.includes('dynamically imported module')) {
-         throw new Error("Không thể tải thư viện xử lý PDF. Vui lòng tắt AdBlock hoặc kiểm tra mạng.");
+    if (error.message?.includes('Failed to fetch') || error.message?.includes('dynamically imported module') || error.message?.includes('NetworkError')) {
+         throw new Error("Không thể tải thư viện xử lý PDF. Vui lòng tắt AdBlock hoặc kiểm tra kết nối mạng.");
     }
 
     // Preserve original error message if it's already specific
