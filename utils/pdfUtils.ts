@@ -1,4 +1,4 @@
-import { getDocument, GlobalWorkerOptions, version, PDFDocumentProxy } from 'pdfjs-dist';
+import { getDocument, GlobalWorkerOptions, version, PDFDocumentProxy, type OnProgressParameters } from 'pdfjs-dist';
 import { runOCRFromPDF } from './ocrUtils';
 
 const CDN_BASE = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${version}`;
@@ -51,7 +51,7 @@ export const extractTextFromPDF = async (
 
     // Report loading progress (0-20%)
     if (options.onProgress) {
-        loadingTask.onProgress = (p) => {
+        loadingTask.onProgress = (p: OnProgressParameters) => {
             if (p.total > 0) {
                  options.onProgress!(Math.round((p.loaded / p.total) * 20));
             }
