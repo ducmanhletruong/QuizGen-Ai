@@ -423,16 +423,21 @@ const App: React.FC = () => {
                        title = "Lỗi Font chữ";
                        suggestion = "PDF sử dụng font chữ không chuẩn hoặc bị mã hóa. Hãy thử chuyển sang định dạng Word hoặc OCR.";
                        bgColor = "bg-slate-100";
-                   } else if (msg.includes("quá lớn") || msg.includes("limit")) {
-                       icon = <FileWarning className="w-8 h-8 md:w-10 md:h-10 text-blue-600" />;
-                       title = "File quá lớn";
-                       suggestion = "File của bạn vượt quá giới hạn xử lý. Vui lòng chọn file nhỏ hơn hoặc chia nhỏ tài liệu.";
-                       bgColor = "bg-blue-50";
                    } else if (msg.includes("api key") || msg.includes("quota") || msg.includes("429")) {
                        icon = <ShieldAlert className="w-8 h-8 md:w-10 md:h-10 text-purple-600" />;
                        title = "Lỗi kết nối dịch vụ";
                        suggestion = "Hệ thống AI đang bận hoặc gặp sự cố kết nối. Vui lòng đợi một lát rồi thử lại.";
                        bgColor = "bg-purple-50";
+                   } else if (msg.includes("resource_exhausted") || msg.includes("token") || msg.includes("rate limit") || msg.includes("rate-limit") || msg.includes("limit")) {
+                       icon = <ShieldAlert className="w-8 h-8 md:w-10 md:h-10 text-purple-600" />;
+                       title = "Lỗi kết nối dịch vụ";
+                       suggestion = "Hệ thống AI đang bận hoặc vượt hạn mức. Vui lòng đợi một lát rồi thử lại.";
+                       bgColor = "bg-purple-50";
+                   } else if (msg.includes("quá lớn") || msg.includes("file too large")) {
+                       icon = <FileWarning className="w-8 h-8 md:w-10 md:h-10 text-blue-600" />;
+                       title = "File quá lớn";
+                       suggestion = "File của bạn vượt quá giới hạn xử lý. Vui lòng chọn file nhỏ hơn hoặc chia nhỏ tài liệu.";
+                       bgColor = "bg-blue-50";
                    } else if (msg.includes("internet") || msg.includes("network") || msg.includes("fetch")) {
                        icon = <WifiOff className="w-8 h-8 md:w-10 md:h-10 text-slate-600" />;
                        title = "Lỗi mạng";
