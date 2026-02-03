@@ -23,7 +23,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isLoading = false
     setIsDragging(false);
   }, []);
 
-  const validateAndUploadLocal = (fileList: FileList | File[]) => {
+  const validateAndUploadLocal = useCallback((fileList: FileList | File[]) => {
     const files = Array.from(fileList);
     const validFiles: File[] = [];
     const errors: string[] = [];
@@ -53,7 +53,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isLoading = false
 
     setError(null);
     onFileUpload(validFiles);
-  };
+  }, [onFileUpload]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -61,7 +61,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isLoading = false
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       validateAndUploadLocal(e.dataTransfer.files);
     }
-  }, [onFileUpload]);
+  }, [validateAndUploadLocal]);
 
   const handleLocalFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -73,7 +73,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isLoading = false
   const handleDriveUpload = async () => {
     const API_KEY = process.env.API_KEY;
     
-    let CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+    let CLIENT_ID = process.env.VITE_GOOGLE_CLIENT_ID;
     if (!CLIENT_ID) {
        const stored = localStorage.getItem('GOOGLE_CLIENT_ID');
        if (stored) CLIENT_ID = stored;

@@ -1,5 +1,4 @@
-
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -108,9 +107,15 @@ const QuizPlayer: React.FC<QuizPlayerProps> = ({ data, mode, examDuration, onRes
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [currentIndex, allQuestions.length, showSummary, mode]);
 
+  const submitExam = useCallback(() => {
+    setIsExamSubmitted(true);
+    if (timerRef.current) clearInterval(timerRef.current);
+    setShowSummary(true);
+  }, []);
+
   // Exam Timer
   useEffect(() => {
-    if (mode === 'exam' && !isExamSubmitted && timeLeft > 0) {
+    if (mode === 'exam' && !isExamSubmitted) {
       timerRef.current = window.setInterval(() => {
         setTimeLeft((prev) => {
           if (prev <= 1) {
@@ -125,7 +130,7 @@ const QuizPlayer: React.FC<QuizPlayerProps> = ({ data, mode, examDuration, onRes
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [mode, isExamSubmitted]);
+  }, [mode, isExamSubmitted, submitExam]);
 
   const currentQuestion = allQuestions[currentIndex];
   const currentAnswer = userAnswers[currentIndex];
@@ -181,12 +186,6 @@ const QuizPlayer: React.FC<QuizPlayerProps> = ({ data, mode, examDuration, onRes
     const shuffled = wrongOptions.sort(() => 0.5 - Math.random());
     const toHide = shuffled.slice(0, 2);
     setHiddenOptions(prev => ({ ...prev, [currentIndex]: toHide }));
-  };
-
-  const submitExam = () => {
-    setIsExamSubmitted(true);
-    if (timerRef.current) clearInterval(timerRef.current);
-    setShowSummary(true);
   };
 
   const restartQuiz = () => {

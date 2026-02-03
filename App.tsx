@@ -184,6 +184,61 @@ const App: React.FC = () => {
     setAppState(AppState.READY);
   };
 
+  // Cleanup effect to destroy PDF proxy when state changes or unmounts
+  useEffect(() => {
+    return () => {
+      if (scannedPDF) {
+        scannedPDF.destroy().catch(console.error);
+      }
+    };
+  }, [scannedPDF]);
+
+  // Memoize error info to prevent recalculation on every render
+  const errorInfo = React.useMemo(() => {
+    let icon = <AlertTriangle className="w-8 h-8 md:w-10 md:h-10 text-red-500" />;
+    let title = "Đã xảy ra lỗi";
+    let suggestion = "Vui lòng thử lại hoặc chọn file khác.";
+    let bgColor = "bg-red-50";
+
+    if (!errorMsg) return { icon, title, suggestion, bgColor };
+
+    const msg = errorMsg.toLowerCase();
+
+    if (msg.includes("mật khẩu") || msg.includes("password")) {
+        icon = <Lock className="w-8 h-8 md:w-10 md:h-10 text-orange-600" />;
+        title = "File được bảo vệ";
+        suggestion = "File PDF này có mật khẩu. Vui lòng mở khóa file hoặc tải lên một file khác.";
+        bgColor = "bg-orange-50";
+    } else if (msg.includes("ảnh scan") || msg.includes("ocr")) {
+        icon = <FileWarning className="w-8 h-8 md:w-10 md:h-10 text-orange-600" />;
+        title = "Không nhận diện được";
+        suggestion = "Quá trình OCR thất bại hoặc bạn đã hủy. Vui lòng thử file khác.";
+        bgColor = "bg-orange-50";
+    } else if (msg.includes("encoding") || msg.includes("font") || msg.includes("giải mã")) {
+        icon = <FileText className="w-8 h-8 md:w-10 md:h-10 text-slate-600" />;
+        title = "Lỗi Font chữ";
+        suggestion = "PDF sử dụng font chữ không chuẩn hoặc bị mã hóa. Hãy thử chuyển sang định dạng Word hoặc OCR.";
+        bgColor = "bg-slate-100";
+    } else if (msg.includes("quá lớn") || msg.includes("limit")) {
+        icon = <FileWarning className="w-8 h-8 md:w-10 md:h-10 text-blue-600" />;
+        title = "File quá lớn";
+        suggestion = "File của bạn vượt quá giới hạn xử lý. Vui lòng chọn file nhỏ hơn hoặc chia nhỏ tài liệu.";
+        bgColor = "bg-blue-50";
+    } else if (msg.includes("api key") || msg.includes("quota") || msg.includes("429")) {
+        icon = <ShieldAlert className="w-8 h-8 md:w-10 md:h-10 text-purple-600" />;
+        title = "Lỗi kết nối dịch vụ";
+        suggestion = "Hệ thống AI đang bận hoặc gặp sự cố kết nối. Vui lòng đợi một lát rồi thử lại.";
+        bgColor = "bg-purple-50";
+    } else if (msg.includes("internet") || msg.includes("network") || msg.includes("fetch")) {
+        icon = <WifiOff className="w-8 h-8 md:w-10 md:h-10 text-slate-600" />;
+        title = "Lỗi mạng";
+        suggestion = "Vui lòng kiểm tra kết nối internet của bạn và thử lại.";
+        bgColor = "bg-slate-100";
+    }
+
+    return { icon, title, suggestion, bgColor };
+  }, [errorMsg]);
+
   const resetApp = () => {
     setAppState(AppState.IDLE);
     setQuizData(null);
@@ -294,7 +349,7 @@ const App: React.FC = () => {
 
                 <div className="bg-slate-50 rounded-xl border border-slate-200 mb-8 max-h-60 overflow-y-auto">
                   {uploadedFileNames.map((name, idx) => (
-                    <div key={idx} className="p-3 border-b border-slate-100 last:border-0 flex items-center">
+                    <div key={`${name}-${idx}`} className="p-3 border-b border-slate-100 last:border-0 flex items-center">
                        {currentFileUri ? <Cloud className="w-4 h-4 text-slate-400 mr-3 shrink-0" /> : <FileText className="w-4 h-4 text-slate-400 mr-3 shrink-0" />}
                        <span className="text-sm font-medium text-slate-700 truncate flex-1">{name}</span>
                        {currentFileUri && <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded ml-2">Cloud</span>}
@@ -399,62 +454,16 @@ const App: React.FC = () => {
         {appState === AppState.ERROR && errorMsg && (
           <div className="max-w-md mx-auto mt-8 md:mt-12 px-4 animate-in fade-in zoom-in-95 duration-300">
              <div className="bg-white rounded-2xl shadow-lg border border-red-100 p-6 md:p-8 text-center">
-                {(() => {
-                   let icon = <AlertTriangle className="w-8 h-8 md:w-10 md:h-10 text-red-500" />;
-                   let title = "Đã xảy ra lỗi";
-                   let suggestion = "Vui lòng thử lại hoặc chọn file khác.";
-                   let bgColor = "bg-red-50";
-
-                   const msg = errorMsg.toLowerCase();
-
-                   if (msg.includes("mật khẩu") || msg.includes("password")) {
-                      icon = <Lock className="w-8 h-8 md:w-10 md:h-10 text-orange-600" />;
-                      title = "File được bảo vệ";
-                      suggestion = "File PDF này có mật khẩu. Vui lòng mở khóa file hoặc tải lên một file khác.";
-                      bgColor = "bg-orange-50";
-                   } else if (msg.includes("ảnh scan") || msg.includes("ocr")) {
-                      // Handled by OCR Runner usually, but fall back here if failed
-                      icon = <FileWarning className="w-8 h-8 md:w-10 md:h-10 text-orange-600" />;
-                      title = "Không nhận diện được";
-                      suggestion = "Quá trình OCR thất bại hoặc bạn đã hủy. Vui lòng thử file khác.";
-                      bgColor = "bg-orange-50";
-                   } else if (msg.includes("encoding") || msg.includes("font") || msg.includes("giải mã")) {
-                       icon = <FileText className="w-8 h-8 md:w-10 md:h-10 text-slate-600" />;
-                       title = "Lỗi Font chữ";
-                       suggestion = "PDF sử dụng font chữ không chuẩn hoặc bị mã hóa. Hãy thử chuyển sang định dạng Word hoặc OCR.";
-                       bgColor = "bg-slate-100";
-                   } else if (msg.includes("quá lớn") || msg.includes("limit")) {
-                       icon = <FileWarning className="w-8 h-8 md:w-10 md:h-10 text-blue-600" />;
-                       title = "File quá lớn";
-                       suggestion = "File của bạn vượt quá giới hạn xử lý. Vui lòng chọn file nhỏ hơn hoặc chia nhỏ tài liệu.";
-                       bgColor = "bg-blue-50";
-                   } else if (msg.includes("api key") || msg.includes("quota") || msg.includes("429")) {
-                       icon = <ShieldAlert className="w-8 h-8 md:w-10 md:h-10 text-purple-600" />;
-                       title = "Lỗi kết nối dịch vụ";
-                       suggestion = "Hệ thống AI đang bận hoặc gặp sự cố kết nối. Vui lòng đợi một lát rồi thử lại.";
-                       bgColor = "bg-purple-50";
-                   } else if (msg.includes("internet") || msg.includes("network") || msg.includes("fetch")) {
-                       icon = <WifiOff className="w-8 h-8 md:w-10 md:h-10 text-slate-600" />;
-                       title = "Lỗi mạng";
-                       suggestion = "Vui lòng kiểm tra kết nối internet của bạn và thử lại.";
-                       bgColor = "bg-slate-100";
-                   }
-
-                   return (
-                     <>
-                       <div className={`w-16 h-16 md:w-20 md:h-20 ${bgColor} rounded-full flex items-center justify-center mx-auto mb-5 shadow-sm`}>
-                         {icon}
-                       </div>
-                       <h3 className="text-xl md:text-2xl font-bold text-slate-900 mb-3">{title}</h3>
-                       <p className="text-slate-600 mb-2 font-medium bg-slate-50 py-2 px-3 rounded-lg inline-block text-sm border border-slate-100 break-words max-w-full">
-                         {errorMsg}
-                       </p>
-                       <p className="text-sm text-slate-500 mb-8 max-w-xs mx-auto leading-relaxed">
-                         {suggestion}
-                       </p>
-                     </>
-                   );
-                })()}
+                 <div className={`w-16 h-16 md:w-20 md:h-20 ${errorInfo.bgColor} rounded-full flex items-center justify-center mx-auto mb-5 shadow-sm`}>
+                   {errorInfo.icon}
+                 </div>
+                 <h3 className="text-xl md:text-2xl font-bold text-slate-900 mb-3">{errorInfo.title}</h3>
+                 <p className="text-slate-600 mb-2 font-medium bg-slate-50 py-2 px-3 rounded-lg inline-block text-sm border border-slate-100 break-words max-w-full">
+                   {errorMsg}
+                 </p>
+                 <p className="text-sm text-slate-500 mb-8 max-w-xs mx-auto leading-relaxed">
+                   {errorInfo.suggestion}
+                 </p>
                 
                 <div className="flex flex-col gap-3">
                   <button 

@@ -10,9 +10,8 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     define: {
-      // This is critical: maps process.env.API_KEY in your code to the actual environment variable
-      'process.env.API_KEY': JSON.stringify(env.API_KEY),
-      'process.env.GOOGLE_CLIENT_ID': JSON.stringify(env.GOOGLE_CLIENT_ID)
+      'process.env.API_KEY': JSON.stringify(env.API_KEY || env.VITE_API_KEY),
+      'process.env.VITE_GOOGLE_CLIENT_ID': JSON.stringify(env.VITE_GOOGLE_CLIENT_ID),
     },
     build: {
       target: 'esnext' // Support modern JS features

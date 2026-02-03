@@ -55,21 +55,57 @@ const quizSchema: Schema = {
   required: ["file_name", "total_questions", "chapters"],
 };
 
-const getContextLabel = (lengthOrType: number | string, source: GenerationSource) => {
-  if (source === 'web') return "Web Search Topic";
-  if (typeof lengthOrType === 'string') return "Cloud File";
-  return "Document Context";
+/**
+ * Shuffles options (A, B, C, D) for every question to ensure true randomization
+ * and eliminate LLM position bias.
+ */
+const shuffleQuizData = (data: QuizData): QuizData => {
+  if (!data.chapters) return data;
+
+  data.chapters.forEach(chapter => {
+    if (!chapter.questions) return;
+    
+    chapter.questions.forEach(q => {
+      // Extract original option values
+      const currentOpts = q.options;
+      const optKeys: (keyof typeof currentOpts)[] = ['A', 'B', 'C', 'D'];
+      const correctText = currentOpts[q.correct_answer as keyof typeof currentOpts];
+      
+      // Create an array of option texts
+      const optTexts = optKeys.map(k => currentOpts[k]);
+      
+      // Fisher-Yates shuffle
+      for (let i = optTexts.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [optTexts[i], optTexts[j]] = [optTexts[j], optTexts[i]];
+      }
+      
+      // Reassign shuffled texts back to keys A, B, C, D
+      q.options.A = optTexts[0];
+      q.options.B = optTexts[1];
+      q.options.C = optTexts[2];
+      q.options.D = optTexts[3];
+      
+      // Find where the correct answer moved to
+      const newCorrectIndex = optTexts.indexOf(correctText);
+      if (newCorrectIndex !== -1) {
+        q.correct_answer = optKeys[newCorrectIndex] as any;
+      }
+    });
+  });
+  
+  return data;
 };
 
 const getDifficultyInstruction = (difficulty: DifficultyDistribution): string => {
   switch (difficulty) {
     case 'beginner':
-      return "Difficulty: Mostly Recall/Understanding. Focus on definitions and basic facts.";
+      return "Difficulty: Beginner. Focus on clear definitions, main concepts, and direct fact retrieval.";
     case 'expert':
-      return "Difficulty: HARD/EXPERT. Focus on Application, Analysis, and Evaluation (Bloom's Taxonomy). Use complex scenarios and 'Best Fit' logic.";
+      return "Difficulty: EXPERT/HARD. Questions must require multi-step reasoning. Use scenarios where the answer is not explicitly stated but implied. Options should be very close to each other.";
     case 'balanced':
     default:
-      return "Difficulty: Mixed. 30% Recall, 50% Application/Understanding, 20% Analysis/Trick questions.";
+      return "Difficulty: Intermediate. Mix of 30% basic recall and 70% application/analysis. Avoid obvious wrong answers.";
   }
 };
 
@@ -124,48 +160,35 @@ export const generateQuizFromText = async (
   if (previousQuestions.length > 0) {
     const historySlice = previousQuestions.slice(-50).map(q => `"${q}"`).join(", ");
     avoidanceInstruction = `
-    CRITICAL - DUPLICATE PREVENTION:
-    DO NOT generate questions identical/similar to: [${historySlice}]
-    Create COMPLETELY NEW questions checking different aspects/details.
+    DUPLICATE CHECK:
+    Do not repeat these questions: [${historySlice}]
+    Generate fresh angles on the topic.
     `;
   }
 
   // 3. Formatting Logic
   const latexInstruction = `
-  IMPORTANT - LaTeX:
-  - Use LaTeX for math.
-  - MUST double-escape backslashes (e.g., "\\\\frac") for valid JSON.
-  - Use $$ for block equations, $ for inline.
+  LaTeX RULES:
+  - Use LaTeX for ALL math formulas.
+  - Double-escape backslashes: "\\\\frac" (not "\\frac").
   `;
 
   // 4. Advanced Question Logic (Difficulty & Variety)
   const questionQualityInstruction = `
-  QUESTION VARIETY & LOGIC:
-  - **Scenario-based**: "Given situation X, what is the best outcome?"
-  - **Negative**: "Which of the following is NOT true?" or "All are true EXCEPT..."
-  - **Synthesis**: "Which statement best summarizes..."
-  - **Trap Answers**: Distractors must be highly plausible. 
-  - **Avoid**: Trivial or obvious questions. 
+  QUESTION QUALITY:
+  - **Variety**: Use a mix of "Scenario", "Negative (Except)", "Comparison", and "Causality" questions.
+  - **No Trivia**: Avoid asking for dates or minor details unless critical. Ask about *relationships* between concepts.
+  - **Distractors**: Wrong answers must be logical pitfalls, not random words.
   `;
 
   // 5. Volume Logic
   const volumeInstruction = `
-  VOLUME REQUIREMENT (CRITICAL):
-  - You MUST generate EXACTLY ${finalQuestionCount} questions.
-  - If the document is short, create variations, test specific details, or reverse logic to reach the target.
-  - DO NOT STOP until you reach ${finalQuestionCount} questions.
+  VOLUME:
+  - Generate EXACTLY ${finalQuestionCount} questions.
+  - Create variations if needed to meet the count.
   `;
 
-  // 6. Strict Distribution Enforcement
-  const distributionInstruction = `
-  STRICT RANDOMIZATION ENFORCEMENT:
-  - It is unacceptable to have correct answers clustered on 'B' or 'C'.
-  - You MUST shuffle the correct answer slot for every question.
-  - Final Output Goal: ~25% A, ~25% B, ~25% C, ~25% D.
-  - Verify this distribution before outputting JSON.
-  `;
-
-  // 7. Source-Specific Logic & Prompt Assembly
+  // 6. Source-Specific Logic & Prompt Assembly
   let contextInstruction = "";
   let parts: any[] = [];
 
@@ -216,16 +239,15 @@ export const generateQuizFromText = async (
     }
   }
 
-  // 8. Final Instructions
+  // 7. Final Instructions
   const finalInstructions = `
     CONFIGURATION:
-    - Target Count: ${finalQuestionCount}
+    - Target: ${finalQuestionCount} questions
     - ${difficultyInstruction}
 
-    RULES:
+    GUIDELINES:
     ${volumeInstruction}
     ${questionQualityInstruction}
-    ${distributionInstruction}
     ${latexInstruction}
     ${avoidanceInstruction}
   `;
@@ -247,7 +269,7 @@ export const generateQuizFromText = async (
         responseMimeType: "application/json",
         responseSchema: quizSchema,
         maxOutputTokens: 65536, 
-        temperature: 0.7, // Increased from 0.5 to 0.7 for more variety in distractors and sentence structure
+        temperature: 0.85, // Higher creativity for novelty
         tools: toolsConfig,
       }
     });
@@ -284,7 +306,8 @@ export const generateQuizFromText = async (
        data.file_name = `${fileName} (Đề số ${(previousQuestions.length / numQuestions + 1).toFixed(0)})`;
     }
 
-    return data;
+    // Apply Client-Side Shuffling
+    return shuffleQuizData(data);
 
   } catch (error: any) {
     if (error instanceof SyntaxError || error.message.includes('JSON')) {
@@ -295,11 +318,14 @@ export const generateQuizFromText = async (
         1. YOU MUST GENERATE EXACTLY ${finalQuestionCount} QUESTIONS.
         2. CHECK JSON SYNTAX CAREFULLY.
         `;
-        return await attemptGeneration(finalQuestionCount, retryPrompt);
+        const retryData = await attemptGeneration(finalQuestionCount, retryPrompt);
+        return shuffleQuizData(retryData);
       } catch (retryError) {
+        // Last resort fallback
         const fallbackCount = Math.max(20, Math.floor(numQuestions * 0.8)).toString();
         try {
-           return await attemptGeneration(fallbackCount, `CRITICAL: Previous attempts failed. Reduce count to ${fallbackCount}. Ensure valid JSON.`);
+           const finalData = await attemptGeneration(fallbackCount, `CRITICAL: Previous attempts failed. Reduce count to ${fallbackCount}. Ensure valid JSON.`);
+           return shuffleQuizData(finalData);
         } catch (finalError) {
            throw new Error("Không thể tạo số lượng câu hỏi lớn. Vui lòng thử lại với số lượng ít hơn.");
         }
